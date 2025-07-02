@@ -1,0 +1,107 @@
+<!-- /data/index.html - ESP32 Web Mission Planner (No API Key Google Maps) -->
+<!DOCTYPE html>
+<html>
+<head>
+  <title>Drone Mission Planner</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <style>
+    body { font-family: sans-serif; padding: 10px; background: #fff; }
+    h2 { margin-top: 20px; }
+    label, select, input { margin: 5px 0; display: block; width: 100%; }
+    .waypoint { margin-bottom: 10px; border: 1px solid #ccc; padding: 10px; border-radius: 5px; }
+    .send-btn { width: 100%; padding: 10px; background: #007bff; color: white; border: none; border-radius: 5px; font-size: 16px; }
+    .status-box { background: #eee; padding: 10px; margin-bottom: 10px; border-radius: 5px; }
+  </style>
+</head>
+<body>
+  <h1>Check Drone</h1>
+  <div class="status-box">
+    <p>Status: <span id="status">Loading...</span></p>
+    <p>GPS: <span id="gps">--</span></p>
+    <p>Latitude: <span id="lat">--</span></p>
+    <p>Longitude: <span id="lon">--</span></p>
+    <p>Altitude: <span id="alt">--</span></p>
+    <p>Ultrasonic: <span id="ultra">--</span></p>
+  </div>
+
+  <h2>Flight Planner</h2>
+  <div>
+    <p>Use <strong>Google Maps on your phone</strong> to pick a location. Then long-press to drop a pin and copy the latitude and longitude.</p>
+    <p><a href="https://www.google.com/maps" target="_blank">Open Google Maps</a></p>
+    <label>Latitude: <input type="number" id="lat-input" step="0.000001"></label>
+    <label>Longitude: <input type="number" id="lon-input" step="0.000001"></label>
+    <button onclick="addWaypointFromInput()">Add Waypoint</button>
+  </div>
+
+  <div id="waypoints"></div>
+
+  <button class="send-btn" onclick="sendMission()">Complete Flight Plan</button>
+
+  <script>
+    let mission = [];
+
+    function addWaypointFromInput() {
+      const lat = parseFloat(document.getElementById("lat-input").value);
+      const lon = parseFloat(document.getElementById("lon-input").value);
+      if (isNaN(lat) || isNaN(lon)) {
+        alert("Please enter valid coordinates");
+        return;
+      }
+      addWaypoint(lat, lon);
+    }
+
+    function addWaypoint(lat, lon) {
+      const idx = mission.length;
+      mission.push({ lat, lon, action: "hover", duration: 60 });
+
+      const container = document.createElement("div");
+      container.className = "waypoint";
+      container.innerHTML = `
+        <label>Waypoint ${idx + 1}</label>
+        <p><strong>Lat:</strong> ${lat} <strong>Lon:</strong> ${lon}</p>
+        <select onchange="updateAction(${idx}, this.value)">
+          <option value="hover">Hover</option>
+          <option value="land">Land</option>
+          <option value="return_home">Return Home</option>
+        </select>
+        <input type="number" placeholder="Duration (s)" value="60" onchange="updateDuration(${idx}, this.value)" />
+      `;
+      document.getElementById("waypoints").appendChild(container);
+    }
+
+    function updateAction(index, action) {
+      mission[index].action = action;
+    }
+
+    function updateDuration(index, duration) {
+      mission[index].duration = parseInt(duration);
+    }
+
+    function sendMission() {
+      fetch("/mission", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ mission }),
+      })
+        .then((res) => res.text())
+        .then((msg) => alert("Mission Sent: " + msg))
+        .catch((err) => alert("Error: " + err));
+    }
+
+    function updateDroneStatus() {
+      fetch("/status")
+        .then(res => res.json())
+        .then(data => {
+          document.getElementById("status").innerText = data.status;
+          document.getElementById("gps").innerText = data.gps;
+          document.getElementById("lat").innerText = data.lat;
+          document.getElementById("lon").innerText = data.lon;
+          document.getElementById("alt").innerText = data.alt;
+          document.getElementById("ultra").innerText = data.ultrasonic;
+        });
+    }
+
+    setInterval(updateDroneStatus, 2000);
+  </script>
+</body>
+</html>

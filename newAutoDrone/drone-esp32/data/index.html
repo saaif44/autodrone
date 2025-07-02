@@ -1,0 +1,166 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Mission Planner</title>
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <style>
+        body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif; margin: 0; display: flex; height: 100vh; background-color: #f0f2f5; }
+        #map { flex-grow: 1; height: 100%; }
+        #sidebar { width: 400px; background: white; box-shadow: -4px 0 15px rgba(0,0,0,0.1); display: flex; flex-direction: column; padding: 20px; overflow-y: auto; }
+        .sidebar-section { border-bottom: 1px solid #eee; padding-bottom: 20px; margin-bottom: 20px; }
+        h2 { margin: 0 0 15px 0; color: #333; }
+        .form-group { margin-bottom: 15px; }
+        .form-group label { display: block; margin-bottom: 5px; font-weight: 500; color: #555; }
+        .form-group input, .form-group select { width: 100%; padding: 10px; border-radius: 6px; border: 1px solid #ccc; box-sizing: border-box; }
+        #home-position { background: #e9f5ff; padding: 10px; border-radius: 6px; font-size: 0.9em; }
+        #mission-steps { list-style: none; padding: 0; }
+        #mission-steps li { background: #f9f9f9; padding: 10px; border-radius: 6px; margin-bottom: 8px; position: relative; }
+        #mission-steps li button { position: absolute; top: 5px; right: 5px; background: #ff4d4d; color: white; border: none; border-radius: 50%; width: 20px; height: 20px; cursor: pointer; line-height: 20px; text-align: center; }
+        .final-actions { margin-top: auto; }
+        .final-actions button { background: #28a745; color: white; border: none; padding: 15px; width: 100%; border-radius: 8px; font-size: 18px; font-weight: bold; cursor: pointer; transition: background-color 0.2s; }
+        .final-actions button:hover { background: #218838; }
+    </style>
+</head>
+<body>
+    <div id="sidebar">
+        <div class="sidebar-section">
+            <h2>Home Position</h2>
+            <div id="home-position">Waiting for GPS lock...</div>
+        </div>
+
+        <div class="sidebar-section">
+            <h2>Add Waypoint</h2>
+            <div class="form-group">
+                <label for="lat">Latitude, Longitude (e.g., 23.76, 90.40)</label>
+                <input type="text" id="latlon" placeholder="Paste from Google Maps">
+            </div>
+            <div class="form-group">
+                <label for="alt">Altitude (meters)</label>
+                <input type="number" id="alt" value="15">
+            </div>
+            <div class="form-group">
+                <label for="action">Action</label>
+                <select id="action">
+                    <option value="fly">Fly To Point</option>
+                    <option value="hover">Hover at Point</option>
+                    <option value="land">Land at Point</option>
+                </select>
+            </div>
+             <div class="form-group" id="duration-group" style="display:none;">
+                <label for="duration">Duration (seconds)</label>
+                <input type="number" id="duration" value="10">
+            </div>
+            <button onclick="addWaypoint()">Add to Mission</button>
+        </div>
+
+        <div class="sidebar-section" style="flex-grow:1;">
+            <h2>Mission Plan</h2>
+            <ul id="mission-steps"></ul>
+        </div>
+        
+        <div class="final-actions">
+            <div class="form-group" style="display: flex; align-items: center;">
+                <input type="checkbox" id="rth" checked style="width: auto; margin-right: 10px;">
+                <label for="rth" style="margin:0;">Return to Home After Mission</label>
+            </div>
+            <button onclick="executeMission()">EXECUTE MISSION</button>
+        </div>
+    </div>
+    <div id="map"></div>
+
+    <script async defer src="https://maps.googleapis.com/maps/api/js?key=YOUR_GOOGLE_MAPS_API_KEY_HERE&callback=initMap"></script>
+    <script>
+        let map, droneMarker, homeMarker;
+        let missionWaypoints = [];
+        const ws = new WebSocket(`ws://${window.location.hostname}/ws`);
+
+        document.getElementById('action').addEventListener('change', function() {
+            document.getElementById('duration-group').style.display = this.value === 'hover' ? 'block' : 'none';
+        });
+
+        function initMap() {
+            const initialPos = { lat: 23.7, lng: 90.4 }; // Dhaka fallback
+            map = new google.maps.Map(document.getElementById("map"), {
+                zoom: 15, center: initialPos, mapTypeId: 'satellite'
+            });
+        }
+
+        ws.onmessage = function(event) {
+            const data = JSON.parse(event.data);
+            if (data.type !== 'telemetry' || !data.lat) return;
+
+            const currentPos = { lat: data.lat, lng: data.lon };
+
+            if (!homeMarker && data.sats >= 5) {
+                document.getElementById('home-position').innerText = `Lat: ${data.lat.toFixed(6)}, Lon: ${data.lon.toFixed(6)}`;
+                homeMarker = new google.maps.Marker({
+                    position: currentPos, map: map, title: "Home",
+                    icon: { url: "http://maps.google.com/mapfiles/ms/icons/green-dot.png" }
+                });
+                map.setCenter(currentPos);
+            }
+
+            if (!droneMarker) {
+                droneMarker = new google.maps.Marker({
+                    position: currentPos, map: map, title: "Drone",
+                    icon: { path: google.maps.SymbolPath.FORWARD_CLOSED_ARROW, scale: 5, rotation: 0, strokeColor: 'cyan' }
+                });
+            } else {
+                droneMarker.setPosition(currentPos);
+                droneMarker.setIcon({ ...droneMarker.getIcon(), rotation: data.heading });
+            }
+        };
+
+        function addWaypoint() {
+            const latlon = document.getElementById('latlon').value.split(',').map(s => parseFloat(s.trim()));
+            if (latlon.length !== 2 || isNaN(latlon[0]) || isNaN(latlon[1])) {
+                alert('Invalid Lat/Lon format. Use "23.76, 90.40"');
+                return;
+            }
+            const waypoint = {
+                lat: latlon[0],
+                lon: latlon[1],
+                alt: parseInt(document.getElementById('alt').value),
+                action: document.getElementById('action').value
+            };
+            if(waypoint.action === 'hover') {
+                waypoint.duration = parseInt(document.getElementById('duration').value);
+            }
+            missionWaypoints.push(waypoint);
+            renderMissionList();
+        }
+        
+        function renderMissionList() {
+            const listEl = document.getElementById('mission-steps');
+            listEl.innerHTML = '';
+            missionWaypoints.forEach((wp, index) => {
+                const li = document.createElement('li');
+                let text = `${index + 1}: ${wp.action.toUpperCase()} at ${wp.alt}m`;
+                if(wp.action === 'fly') text += ` to ${wp.lat.toFixed(4)}, ${wp.lon.toFixed(4)}`;
+                if(wp.action === 'hover') text += ` for ${wp.duration}s`;
+                li.innerHTML = `${text} <button onclick="removeWaypoint(${index})">X</button>`;
+                listEl.appendChild(li);
+            });
+        }
+        
+        function removeWaypoint(index) {
+            missionWaypoints.splice(index, 1);
+            renderMissionList();
+        }
+
+        function executeMission() {
+            if(missionWaypoints.length === 0) {
+                alert("Mission plan is empty!");
+                return;
+            }
+            const payload = {
+                mission: missionWaypoints,
+                return_home: document.getElementById('rth').checked
+            };
+            ws.send(JSON.stringify(payload));
+            alert("Mission sent to drone!");
+        }
+
+    </script>
+</body>
+</html>

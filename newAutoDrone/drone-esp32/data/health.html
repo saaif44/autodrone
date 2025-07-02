@@ -1,0 +1,98 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Drone Health Check</title>
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <style>
+        body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif; background: #f0f2f5; display: flex; justify-content: center; align-items: center; height: 100vh; margin: 0; }
+        .container { background: white; padding: 30px 40px; border-radius: 12px; box-shadow: 0 4px 20px rgba(0,0,0,0.1); width: 90%; max-width: 500px; }
+        h1 { text-align: center; color: #333; margin-bottom: 25px; }
+        .status-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 20px; margin-bottom: 30px; }
+        .status-item { background: #f9f9f9; padding: 15px; border-radius: 8px; border-left: 5px solid #ccc; }
+        .status-item h3 { margin: 0 0 5px 0; color: #555; }
+        .status-item .value { font-size: 1.5em; font-weight: bold; color: #333; }
+        .status-item.ok { border-left-color: #28a745; }
+        .status-item.warn { border-left-color: #ffc107; }
+        .status-item.fail { border-left-color: #dc3545; }
+        button { background: #007bff; color: white; border: none; padding: 15px; width: 100%; border-radius: 8px; font-size: 16px; cursor: pointer; transition: background-color 0.2s; margin-top: 10px; }
+        button:hover:not(:disabled) { background: #0056b3; }
+        button:disabled { background: #cccccc; cursor: not-allowed; }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>Pre-Flight Health Check</h1>
+        <div class="status-grid">
+            <div id="gps-status" class="status-item"><h3 >GPS Satellites</h3><span class="value">--</span></div>
+            <div id="mpu-status" class="status-item"><h3>Gyro/Accel</h3><span class="value">--</span></div>
+            <div id="battery-status" class="status-item"><h3>Battery</h3><span class="value">-- V</span></div>
+            <div id="vibe-status" class="status-item"><h3>Vibration</h3><span class="value">--</span></div>
+        </div>
+        <button id="vibe-test-btn" onclick="startVibrationTest()">1. Start Vibration Test</button>
+        <button id="planner-btn" onclick="window.location.href='/planner.html'" disabled>2. Proceed to Mission Planner</button>
+    </div>
+
+    <script>
+        const ws = new WebSocket(`ws://${window.location.hostname}/ws`);
+        const plannerBtn = document.getElementById('planner-btn');
+        const vibeBtn = document.getElementById('vibe-test-btn');
+        let healthState = { gps: false, mpu: false, battery: false, vibration: 'pending' };
+
+        ws.onmessage = function(event) {
+            const data = JSON.parse(event.data);
+            if (data.type !== 'telemetry') return;
+
+            // Update GPS
+            const gpsEl = document.getElementById('gps-status');
+            const satCount = data.sats || 0;
+            gpsEl.querySelector('.value').innerText = satCount;
+            healthState.gps = satCount >= 5;
+            updateClass(gpsEl, healthState.gps);
+
+            // Update MPU
+            const mpuEl = document.getElementById('mpu-status');
+            healthState.mpu = data.mpu_ok === true;
+            mpuEl.querySelector('.value').innerText = healthState.mpu ? 'OK' : 'FAIL';
+            updateClass(mpuEl, healthState.mpu);
+
+            // Update Battery
+            const batEl = document.getElementById('battery-status');
+            const batVoltage = data.batteryV || 0;
+            batEl.querySelector('.value').innerText = `${batVoltage.toFixed(2)} V`;
+            healthState.battery = batVoltage > 10.5; // Example for 3S LiPo
+            updateClass(batEl, healthState.battery);
+
+            // Update Vibration
+            const vibeEl = document.getElementById('vibe-status');
+            if (data.state === 'VIBE_TEST') {
+                vibeEl.querySelector('.value').innerText = 'Testing...';
+                healthState.vibration = 'testing';
+                vibeBtn.disabled = true;
+            } else if (healthState.vibration === 'testing' && data.state !== 'VIBE_TEST') {
+                // Assuming STM32 sends vibration_level < 0.5 for a pass
+                healthState.vibration = data.vibration_level < 0.5 ? 'pass' : 'fail';
+                 vibeEl.querySelector('.value').innerText = healthState.vibration.toUpperCase();
+            }
+             updateClass(vibeEl, healthState.vibration === 'pass');
+
+            checkAllSystems();
+        };
+
+        function startVibrationTest() {
+            healthState.vibration = 'testing';
+            document.getElementById('vibe-status').querySelector('.value').innerText = 'Starting...';
+            ws.send(JSON.stringify({ command: 'start_vibration_test' }));
+        }
+
+        function updateClass(element, isOk) {
+            element.classList.remove('ok', 'warn', 'fail');
+            element.classList.add(isOk ? 'ok' : 'fail');
+        }
+
+        function checkAllSystems() {
+            const allOk = healthState.gps && healthState.mpu && healthState.battery && healthState.vibration === 'pass';
+            plannerBtn.disabled = !allOk;
+        }
+    </script>
+</body>
+</html>
